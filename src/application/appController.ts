@@ -61,6 +61,7 @@ export type SlotFormInput = Readonly<{
 export class AppController {
   private state: AppState;
   private selectedSlotId: string | null;
+  private saveInProgress = false;
 
   public constructor(
     initialState: AppState,
@@ -77,6 +78,13 @@ export class AppController {
 
   public getSnapshot(): AppSnapshot {
     return { state: this.state, selectedSlotId: this.selectedSlotId };
+  }
+
+  public replaceStateFromRemote(state: AppState): void {
+    this.state = state;
+    if (!state.slots.some((slot) => slot.id === this.selectedSlotId)) {
+      this.selectedSlotId = state.slots[0]?.id ?? null;
+    }
   }
 
   public getCurrentTimeZone(): string | null {
@@ -99,9 +107,9 @@ export class AppController {
     return true;
   }
 
-  public createSlot(
+  public async createSlot(
     input: SlotFormInput,
-  ): Result<Readonly<{ slotId: string }>, AppControllerError> {
+  ): Promise<Result<Readonly<{ slotId: string }>, AppControllerError>> {
     const timeZone = this.getCurrentTimeZone();
     if (timeZone === null) {
       return failure({
@@ -116,7 +124,7 @@ export class AppController {
       return result;
     }
 
-    const saveResult = this.stateWriter.save(result.value.state);
+    const saveResult = await this.saveState(result.value.state);
     if (!saveResult.ok) {
       return saveResult;
     }
@@ -126,11 +134,11 @@ export class AppController {
     return success({ slotId });
   }
 
-  public updateSlot(
+  public async updateSlot(
     slotId: string,
     input: SlotFormInput,
     resetLastGeneratedTime = false,
-  ): Result<void, AppControllerError> {
+  ): Promise<Result<void, AppControllerError>> {
     const result = updateSlot(this.state, slotId, {
       ...input,
       resetLastGeneratedTime,
@@ -142,14 +150,14 @@ export class AppController {
     return this.commit(result.value);
   }
 
-  public deleteSlot(slotId: string): Result<void, AppControllerError> {
+  public async deleteSlot(slotId: string): Promise<Result<void, AppControllerError>> {
     const deletedIndex = this.state.slots.findIndex((slot) => slot.id === slotId);
     const result = deleteSlot(this.state, slotId);
     if (!result.ok) {
       return result;
     }
 
-    const saveResult = this.stateWriter.save(result.value);
+    const saveResult = await this.saveState(result.value);
     if (!saveResult.ok) {
       return saveResult;
     }
@@ -165,9 +173,9 @@ export class AppController {
     return success(undefined);
   }
 
-  public generateNextTime(
+  public async generateNextTime(
     slotId: string,
-  ): Result<GeneratedTime, AppControllerError> {
+  ): Promise<Result<GeneratedTime, AppControllerError>> {
     const slotIndex = this.state.slots.findIndex((slot) => slot.id === slotId);
     const slot = this.state.slots[slotIndex];
     if (slot === undefined) {
@@ -192,7 +200,7 @@ export class AppController {
       lastGeneratedTime: generationResult.value,
     };
     const nextState: AppState = { ...this.state, slots };
-    const saveResult = this.stateWriter.save(nextState);
+    const saveResult = await this.saveState(nextState);
     if (!saveResult.ok) {
       return saveResult;
     }
@@ -201,9 +209,9 @@ export class AppController {
     return success(generationResult.value);
   }
 
-  public setShellFormat(
+  public async setShellFormat(
     shellFormat: ShellFormat,
-  ): Result<void, AppControllerError> {
+  ): Promise<Result<void, AppControllerError>> {
     if (!isShellFormat(shellFormat)) {
       return failure({
         code: "invalid_shell_format",
@@ -274,10 +282,10 @@ export class AppController {
     return success(decodeResult.value);
   }
 
-  public applyBackupImport(
+  public async applyBackupImport(
     prepared: PreparedBackupImport,
-  ): Result<void, AppControllerError> {
-    const saveResult = this.stateWriter.save(prepared.state);
+  ): Promise<Result<void, AppControllerError>> {
+    const saveResult = await this.saveState(prepared.state);
     if (!saveResult.ok) {
       return saveResult;
     }
@@ -287,14 +295,30 @@ export class AppController {
     return success(undefined);
   }
 
-  private commit(nextState: AppState): Result<void, StateWriteError> {
-    const saveResult = this.stateWriter.save(nextState);
+  private async commit(nextState: AppState): Promise<Result<void, StateWriteError>> {
+    const saveResult = await this.saveState(nextState);
     if (!saveResult.ok) {
       return saveResult;
     }
 
     this.state = nextState;
     return success(undefined);
+  }
+
+  private async saveState(state: AppState): Promise<Result<void, StateWriteError>> {
+    if (this.saveInProgress) {
+      return failure({
+        code: "save_in_progress",
+        message: "이전 변경 내용을 저장하고 있습니다. 잠시 후 다시 시도해 주세요.",
+      });
+    }
+
+    this.saveInProgress = true;
+    try {
+      return await this.stateWriter.save(state);
+    } finally {
+      this.saveInProgress = false;
+    }
   }
 }
 

@@ -69,7 +69,7 @@ export class RecordingStateWriter implements AppStateWriter {
   public readonly savedStates: AppState[] = [];
   public shouldFail = false;
 
-  public save(state: AppState): Result<void, StateWriteError> {
+  public async save(state: AppState): Promise<Result<void, StateWriteError>> {
     if (this.shouldFail) {
       return failure({ code: "save_failed", message: "테스트 저장 실패" });
     }

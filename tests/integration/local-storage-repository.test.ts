@@ -38,16 +38,20 @@ function createRepository(storage = new MemoryKeyValueStorage()) {
 describe("로컬 저장소 상태 저장소 통합", () => {
   it("저장 데이터가 없으면 알림 없이 초기 상태를 반환한다", () => {
     const { repository } = createRepository();
-    expect(repository.load()).toEqual({ state: createInitialAppState(), notices: [] });
+    expect(repository.load()).toEqual({
+      state: createInitialAppState(),
+      notices: [],
+      hasStoredState: false,
+    });
   });
 
-  it("유효한 상태를 저장하고 같은 값으로 다시 읽는다", () => {
+  it("유효한 상태를 저장하고 같은 값으로 다시 읽는다", async () => {
     const { repository, storage } = createRepository();
     const state = createStateFixture({ shellFormat: "cmd" });
 
-    expect(repository.save(state)).toEqual({ ok: true, value: undefined });
+    expect(await repository.save(state)).toEqual({ ok: true, value: undefined });
     expect(JSON.parse(storage.values.get(APP_STATE_STORAGE_KEY)!)).toEqual(state);
-    expect(repository.load()).toEqual({ state, notices: [] });
+    expect(repository.load()).toEqual({ state, notices: [], hasStoredState: true });
   });
 
   it("안전하게 정규화할 값은 고친 뒤 저장소에도 다시 기록한다", () => {
@@ -81,7 +85,7 @@ describe("로컬 저장소 상태 저장소 통합", () => {
     );
   });
 
-  it("새 스키마 원문은 보존하고 이후 저장을 차단한다", () => {
+  it("새 스키마 원문은 보존하고 이후 저장을 차단한다", async () => {
     const { repository, storage } = createRepository();
     const raw = JSON.stringify({ schemaVersion: 2, slots: [], shellFormat: null });
     storage.values.set(APP_STATE_STORAGE_KEY, raw);
@@ -90,14 +94,14 @@ describe("로컬 저장소 상태 저장소 통합", () => {
     expect(result.notices).toMatchObject([{ code: "unsupported_newer_schema" }]);
     expect(storage.values.get(APP_STATE_RECOVERY_KEY)).toBe(raw);
     expect(storage.values.get(APP_STATE_STORAGE_KEY)).toBe(raw);
-    expect(repository.save(createInitialAppState())).toMatchObject({
+    expect(await repository.save(createInitialAppState())).toMatchObject({
       ok: false,
       error: { code: "save_failed" },
     });
     expect(storage.values.get(APP_STATE_STORAGE_KEY)).toBe(raw);
   });
 
-  it("읽기·쓰기 실패를 결과와 시작 알림으로 반환한다", () => {
+  it("읽기·쓰기 실패를 결과와 시작 알림으로 반환한다", async () => {
     const { repository, storage } = createRepository();
     storage.readShouldFail = true;
     expect(repository.load()).toMatchObject({
@@ -107,7 +111,7 @@ describe("로컬 저장소 상태 저장소 통합", () => {
 
     storage.readShouldFail = false;
     storage.writeShouldFail = true;
-    expect(repository.save(createStateFixture())).toMatchObject({
+    expect(await repository.save(createStateFixture())).toMatchObject({
       ok: false,
       error: { code: "save_failed" },
     });

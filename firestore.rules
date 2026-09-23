@@ -1,0 +1,38 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAllowedOwner(userId) {
+      return request.auth != null
+        && request.auth.uid == userId
+        && request.auth.uid == "5eMeE2Kx6gW2C1UpDma1fcvO8Kl1";
+    }
+
+    function isValidDocument(data) {
+      return data.keys().hasOnly(["state", "revision", "updatedAt"])
+        && data.revision is int
+        && data.revision > 0
+        && data.updatedAt == request.time
+        && data.state is map
+        && data.state.keys().hasOnly(["schemaVersion", "slots", "shellFormat"])
+        && data.state.schemaVersion == 1
+        && data.state.slots is list
+        && data.state.slots.size() <= 5
+        && (
+          data.state.shellFormat == null
+          || data.state.shellFormat in ["bash", "powershell", "cmd"]
+        );
+    }
+
+    match /appStates/{userId} {
+      allow read: if isAllowedOwner(userId);
+      allow create: if isAllowedOwner(userId)
+        && isValidDocument(request.resource.data)
+        && request.resource.data.revision == 1;
+      allow update: if isAllowedOwner(userId)
+        && isValidDocument(request.resource.data)
+        && request.resource.data.revision == resource.data.revision + 1;
+      allow delete: if false;
+    }
+  }
+}

@@ -5,7 +5,7 @@ import { success, type Result } from "../../domain/result";
 export class MemoryAppStateWriter implements AppStateWriter {
   private state: AppState | null = null;
 
-  public save(state: AppState): Result<void, never> {
+  public async save(state: AppState): Promise<Result<void, never>> {
     this.state = state;
     return success(undefined);
   }
