@@ -5,6 +5,8 @@ import {
   type SlotFormInput,
 } from "../application/appController";
 import type { StartupNotice } from "../application/ports/appStateRepository";
+import type { AuthUser } from "../application/ports/authGateway";
+import type { SyncStatusUpdate } from "../application/synchronizedAppStateWriter";
 import {
   MAX_SLOT_COUNT,
   type ShellFormat,
@@ -26,8 +28,21 @@ export function mountApp(
   root: HTMLElement,
   controller: AppController,
   startupNotices: readonly StartupNotice[] = [],
-): void {
-  new AppView(root, controller, startupNotices).mount();
+  options: ReadyAppOptions,
+): AppViewHandle {
+  const view = new AppView(root, controller, startupNotices, options);
+  view.mount();
+  return view;
+}
+
+export type ReadyAppOptions = Readonly<{
+  user: AuthUser;
+  getSyncStatus: () => SyncStatusUpdate;
+  onSignOut: () => Promise<void>;
+}>;
+
+export interface AppViewHandle {
+  refresh(): void;
 }
 
 class AppView {
@@ -48,6 +63,7 @@ class AppView {
     private readonly root: HTMLElement,
     private readonly controller: AppController,
     startupNotices: readonly StartupNotice[],
+    private readonly options: ReadyAppOptions,
   ) {
     this.statusMessage =
       startupNotices.length === 0
@@ -64,6 +80,10 @@ class AppView {
     this.render();
   }
 
+  public refresh(): void {
+    this.render();
+  }
+
   private render(focusSlotId?: string, focusSelector?: string): void {
     const snapshot = this.controller.getSnapshot();
     const selectedSlot =
@@ -71,6 +91,13 @@ class AppView {
     const currentTimeZone = this.controller.getCurrentTimeZone();
     const gitCommand =
       selectedSlot === null ? null : this.controller.getGitCommand(selectedSlot.id);
+    const sync = this.options.getSyncStatus();
+    const syncMessage = sync.message === null
+      ? this.statusMessage
+      : {
+          message: sync.message,
+          tone: sync.status === "cache_warning" ? "warning" as const : "error" as const,
+        };
 
     this.root.innerHTML = `
       <div class="app-shell">
@@ -90,11 +117,11 @@ class AppView {
               <b></b>
               <span><i>03</i> 명령 복사</span>
             </div>
-            <p class="storage-note"><span aria-hidden="true"></span> 이 브라우저에만 저장됩니다.</p>
+            ${renderAccountStatus(this.options.user, sync.status)}
           </div>
         </header>
 
-        ${renderStatusBanner(this.statusMessage)}
+        ${renderStatusBanner(syncMessage)}
 
         <main class="app-content">
           ${renderSlotPanel(snapshot.state.slots, snapshot.selectedSlotId)}
@@ -133,6 +160,10 @@ class AppView {
   }
 
   private bindEvents(): void {
+    this.root
+      .querySelector<HTMLButtonElement>("[data-sign-out]")
+      ?.addEventListener("click", () => void this.options.onSignOut());
+
     this.root.querySelector<HTMLButtonElement>("[data-add-slot]")?.addEventListener("click", () => {
       this.openSlotForm("create");
     });
@@ -171,7 +202,7 @@ class AppView {
     const slotForm = this.root.querySelector<HTMLFormElement>("#slot-form");
     slotForm?.addEventListener("submit", (event) => {
       event.preventDefault();
-      this.submitSlotForm(slotForm);
+      void this.submitSlotForm(slotForm);
     });
 
     this.root.querySelectorAll<HTMLButtonElement>("[data-close-dialog]").forEach((button) => {
@@ -180,11 +211,11 @@ class AppView {
 
     this.root
       .querySelector<HTMLButtonElement>("[data-confirm-date-reset]")
-      ?.addEventListener("click", () => this.confirmDateReset());
+      ?.addEventListener("click", () => void this.confirmDateReset());
 
     this.root
       .querySelector<HTMLButtonElement>("[data-confirm-delete]")
-      ?.addEventListener("click", () => this.confirmDelete());
+      ?.addEventListener("click", () => void this.confirmDelete());
 
     this.root
       .querySelector<HTMLButtonElement>("[data-generate-time]")
@@ -192,7 +223,7 @@ class AppView {
         const button = event.currentTarget as HTMLButtonElement;
         const slotId = button.dataset.generateTime;
         if (slotId !== undefined) {
-          this.generateTime(slotId);
+          void this.generateTime(slotId);
         }
       });
 
@@ -226,20 +257,14 @@ class AppView {
     });
     this.root
       .querySelector<HTMLButtonElement>("[data-confirm-import]")
-      ?.addEventListener("click", () => this.confirmBackupImport());
+      ?.addEventListener("click", () => void this.confirmBackupImport());
 
     this.root
       .querySelectorAll<HTMLInputElement>('input[name="shellFormat"]')
       .forEach((input) => {
         input.addEventListener("change", () => {
           if (input.checked && isShellFormat(input.value)) {
-            const result = this.controller.setShellFormat(input.value);
-            if (!result.ok) {
-              this.showBanner(result.error.message);
-              return;
-            }
-            this.copyMessage = null;
-            this.render(undefined, `input[value="${input.value}"]`);
+            void this.setShellFormat(input.value);
           }
         });
       });
@@ -277,7 +302,7 @@ class AppView {
     nameInput.focus();
   }
 
-  private submitSlotForm(form: HTMLFormElement): void {
+  private async submitSlotForm(form: HTMLFormElement): Promise<void> {
     this.clearFormErrors(form);
 
     const formData = new FormData(form);
@@ -288,10 +313,14 @@ class AppView {
     };
     const mode = form.dataset.mode as SlotFormMode | undefined;
     const slotId = form.dataset.slotId ?? "";
-    const result =
+    const submitButton = this.requireElement<HTMLButtonElement>("#slot-form-submit");
+    submitButton.disabled = true;
+    const result = await (
       mode === "edit"
         ? this.controller.updateSlot(slotId, input)
-        : this.controller.createSlot(input);
+        : this.controller.createSlot(input)
+    );
+    submitButton.disabled = false;
 
     if (!result.ok) {
       if (result.error.code === "last_generated_time_out_of_range") {
@@ -349,13 +378,16 @@ class AppView {
     this.requireElement<HTMLDialogElement>("#date-reset-dialog").showModal();
   }
 
-  private confirmDateReset(): void {
+  private async confirmDateReset(): Promise<void> {
     if (this.pendingDateReset === null) {
       return;
     }
 
     const { slotId, input } = this.pendingDateReset;
-    const result = this.controller.updateSlot(slotId, input, true);
+    const button = this.requireElement<HTMLButtonElement>("[data-confirm-date-reset]");
+    button.disabled = true;
+    const result = await this.controller.updateSlot(slotId, input, true);
+    button.disabled = false;
     if (!result.ok) {
       this.showBanner(result.error.message);
       return;
@@ -375,14 +407,16 @@ class AppView {
     dialog.showModal();
   }
 
-  private confirmDelete(): void {
+  private async confirmDelete(): Promise<void> {
     const confirmButton = this.requireElement<HTMLButtonElement>("[data-confirm-delete]");
     const slotId = confirmButton.dataset.slotId;
     if (slotId === undefined) {
       return;
     }
 
-    const result = this.controller.deleteSlot(slotId);
+    confirmButton.disabled = true;
+    const result = await this.controller.deleteSlot(slotId);
+    confirmButton.disabled = false;
     if (!result.ok) {
       this.showBanner(result.error.message);
       return;
@@ -392,8 +426,11 @@ class AppView {
     this.render(this.controller.getSnapshot().selectedSlotId ?? undefined);
   }
 
-  private generateTime(slotId: string): void {
-    const result = this.controller.generateNextTime(slotId);
+  private async generateTime(slotId: string): Promise<void> {
+    const button = this.requireElement<HTMLButtonElement>("[data-generate-time]");
+    button.disabled = true;
+    button.textContent = "저장 중…";
+    const result = await this.controller.generateNextTime(slotId);
     if (!result.ok) {
       this.generationMessage = {
         slotId,
@@ -407,6 +444,16 @@ class AppView {
     this.generationMessage = null;
     this.copyMessage = null;
     this.render(undefined, "[data-generate-time]");
+  }
+
+  private async setShellFormat(shellFormat: ShellFormat): Promise<void> {
+    const result = await this.controller.setShellFormat(shellFormat);
+    if (!result.ok) {
+      this.showBanner(result.error.message);
+      return;
+    }
+    this.copyMessage = null;
+    this.render(undefined, `input[value="${shellFormat}"]`);
   }
 
   private async copyCommand(slotId: string, button: HTMLButtonElement): Promise<void> {
@@ -458,13 +505,16 @@ class AppView {
     this.requireElement<HTMLDialogElement>("#import-dialog").showModal();
   }
 
-  private confirmBackupImport(): void {
+  private async confirmBackupImport(): Promise<void> {
     if (this.pendingBackupImport === null) {
       return;
     }
 
     const normalized = this.pendingBackupImport.normalized;
-    const result = this.controller.applyBackupImport(this.pendingBackupImport);
+    const button = this.requireElement<HTMLButtonElement>("[data-confirm-import]");
+    button.disabled = true;
+    const result = await this.controller.applyBackupImport(this.pendingBackupImport);
+    button.disabled = false;
     if (!result.ok) {
       const error = this.requireElement<HTMLElement>("#import-error");
       error.textContent = result.error.message;
@@ -533,6 +583,30 @@ class AppView {
     }
     return element;
   }
+}
+
+function renderAccountStatus(user: AuthUser, status: SyncStatusUpdate["status"]): string {
+  const statusLabel =
+    status === "saving"
+      ? "Firebase에 저장 중…"
+      : status === "synced"
+        ? "Firebase 동기화됨"
+        : status === "cache_warning"
+          ? "로컬 캐시 확인 필요"
+          : "동기화 확인 필요";
+  const accountLabel = user.email ?? user.displayName ?? "Google 계정";
+
+  return `
+    <div class="account-status">
+      <p class="storage-note storage-note--${status}">
+        <span aria-hidden="true"></span> ${statusLabel}
+      </p>
+      <div class="account-status__user">
+        <span title="${escapeHtml(accountLabel)}">${escapeHtml(accountLabel)}</span>
+        <button class="text-button" type="button" data-sign-out>로그아웃</button>
+      </div>
+    </div>
+  `;
 }
 
 function renderStatusBanner(
@@ -796,9 +870,9 @@ function renderDataManagement(
   return `
     <section class="panel data-management" aria-labelledby="data-management-title">
       <div>
-        <p class="panel__eyebrow">로컬 데이터</p>
+        <p class="panel__eyebrow">데이터 백업</p>
         <h2 id="data-management-title">백업과 복원</h2>
-        <p>현재 브라우저에 저장된 전체 상태를 JSON 파일로 옮길 수 있습니다.</p>
+        <p>Firebase에 동기화된 전체 상태를 JSON 파일로 내보내거나 교체할 수 있습니다.</p>
       </div>
       <div class="data-management__actions">
         <button class="button button--secondary" type="button" data-export-backup>

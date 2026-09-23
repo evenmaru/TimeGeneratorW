@@ -31,6 +31,7 @@ export class LocalStorageAppStateRepository implements AppStateRepository {
     } catch (cause) {
       return {
         state: createInitialAppState(),
+        hasStoredState: false,
         notices: [
           {
             code: "storage_read_failed",
@@ -43,7 +44,7 @@ export class LocalStorageAppStateRepository implements AppStateRepository {
     }
 
     if (raw === null) {
-      return { state: createInitialAppState(), notices: [] };
+      return { state: createInitialAppState(), notices: [], hasStoredState: false };
     }
 
     const decodeResult = decodeAppStateJson(raw, this.timeZonePort);
@@ -61,7 +62,7 @@ export class LocalStorageAppStateRepository implements AppStateRepository {
       if (!preserved) {
         notices.push(recoveryCopyFailedNotice());
       }
-      return { state: createInitialAppState(), notices };
+      return { state: createInitialAppState(), notices, hasStoredState: true };
     }
 
     if (!decodeResult.ok) {
@@ -70,13 +71,14 @@ export class LocalStorageAppStateRepository implements AppStateRepository {
 
     const { state, normalized } = decodeResult.value;
     if (!normalized) {
-      return { state, notices: [] };
+      return { state, notices: [], hasStoredState: true };
     }
 
     try {
       this.storage.setItem(APP_STATE_STORAGE_KEY, encodeAppStateJson(state));
       return {
         state,
+        hasStoredState: true,
         notices: [
           {
             code: "state_normalized",
@@ -88,6 +90,7 @@ export class LocalStorageAppStateRepository implements AppStateRepository {
     } catch {
       return {
         state,
+        hasStoredState: true,
         notices: [
           {
             code: "normalization_save_failed",
@@ -100,7 +103,7 @@ export class LocalStorageAppStateRepository implements AppStateRepository {
     }
   }
 
-  public save(state: AppState): Result<void, StateWriteError> {
+  public async save(state: AppState): Promise<Result<void, StateWriteError>> {
     if (this.writesBlocked) {
       return failure({
         code: "save_failed",
@@ -141,6 +144,15 @@ export class LocalStorageAppStateRepository implements AppStateRepository {
     }
   }
 
+  public preserveCurrentStateAsRecovery(): boolean {
+    try {
+      const raw = this.storage.getItem(APP_STATE_STORAGE_KEY);
+      return raw === null || this.tryPreserveRecoveryCopy(raw);
+    } catch {
+      return false;
+    }
+  }
+
   private recoverInvalidState(raw: string): AppStateLoadResult {
     const preserved = this.tryPreserveRecoveryCopy(raw);
     const state = createInitialAppState();
@@ -168,7 +180,7 @@ export class LocalStorageAppStateRepository implements AppStateRepository {
       });
     }
 
-    return { state, notices };
+    return { state, notices, hasStoredState: true };
   }
 
   private tryPreserveRecoveryCopy(raw: string): boolean {

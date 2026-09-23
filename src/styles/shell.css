@@ -150,6 +150,120 @@
   background: var(--color-accent);
 }
 
+.account-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+}
+
+.account-status .storage-note {
+  justify-self: auto;
+}
+
+.storage-note--saving span {
+  background: var(--color-primary);
+}
+
+.storage-note--cache_warning span,
+.storage-note--sync_error span {
+  background: var(--color-coral);
+}
+
+.account-status__user {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.account-status__user > span {
+  overflow: hidden;
+  max-width: 190px;
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-status__user .text-button {
+  min-height: 36px;
+  padding-block: 6px;
+}
+
+.app-shell--session {
+  min-height: 100vh;
+}
+
+.session-header {
+  grid-template-columns: minmax(0, 700px);
+}
+
+.session-panel {
+  display: grid;
+  width: min(100%, 600px);
+  min-height: 260px;
+  align-content: center;
+  justify-items: start;
+  gap: 14px;
+  margin-inline: auto;
+}
+
+.session-panel > p:not(.panel__eyebrow, .session-panel__error, .session-panel__uid) {
+  color: var(--color-text-secondary);
+  line-height: 1.65;
+}
+
+.session-panel > .button {
+  margin-top: 8px;
+}
+
+.session-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.session-panel__error {
+  width: 100%;
+  padding: 10px 12px;
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-control);
+  background: var(--color-danger-soft);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.session-panel__uid {
+  max-width: 100%;
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+}
+
+.session-panel__uid code {
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+}
+
+.session-loader {
+  width: 28px;
+  height: 28px;
+  margin-top: 6px;
+  border: 3px solid var(--color-border-soft);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: session-spin 700ms linear infinite;
+}
+
+@keyframes session-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .app-content {
   display: grid;
   grid-template-columns: 410px minmax(0, 1fr);
@@ -290,6 +404,11 @@
   .storage-note {
     justify-self: start;
   }
+
+  .account-status {
+    align-items: flex-start;
+    justify-content: space-between;
+  }
 }
 
 @media (width < 640px) {
@@ -330,5 +449,15 @@
 
   .panel {
     padding: 18px;
+  }
+
+  .account-status {
+    display: grid;
+    justify-content: stretch;
+    gap: 4px;
+  }
+
+  .account-status__user {
+    justify-content: space-between;
   }
 }

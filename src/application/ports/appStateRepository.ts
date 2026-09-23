@@ -18,8 +18,10 @@ export type StartupNotice = Readonly<{
 export type AppStateLoadResult = Readonly<{
   state: AppState;
   notices: readonly StartupNotice[];
+  hasStoredState: boolean;
 }>;
 
 export interface AppStateRepository extends AppStateWriter {
   load(): AppStateLoadResult;
+  preserveCurrentStateAsRecovery(): boolean;
 }
